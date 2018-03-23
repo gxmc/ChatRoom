@@ -1,0 +1,84 @@
+# 客户端接口  
+
+提供给客户端的接口函数都定义在Client类里面，对应文件Client.h和Client.cpp  
+  
+### 定义Client类对象  
+```Client client;```
+通过包含头文件```<Client.h>```，定义Client类的对象来使用接口。  
+  
+### 连接服务器   
+@parm serverIp 服务器IP
+@parm serverPort 服务器服务端口
+@return true, 连接服务器成功
+@return false, 连接服务器失败
+```bool connectServer(std::string serverIp = "127.0.0.1", int serverPort = 5000);```
+
+### 注册账号   
+@pre 登录服务器成功
+@parm name 账号名
+@parm password 账号密码
+@return SIGN_UP_SUCCESS，注册成功
+@return SIGN_UP_FAIL，注册失败
+```int signUp(std::string name, std::string password);```  
+
+### 登录
+@pram name 账号
+@parm password 密码
+@return SIGN_IN_SUCCESS 登录成功  
+@return SIGN_IN_ACCOUNT_NOT_EXISTENT 账号不存在
+@return SIGN_IN_PASSWORD_ERROR 密码错误
+```int signIn(std::string name, std::string password);```  
+
+### 列出所有在线用户
+@return 用户名以string类型存储，返回存放了所有用户名的vector
+```std::vector<std::string> lsUsers();```
+
+### 列出所有群
+@return 群名称以string类型存储，返回存放了所有群名称的vector
+```std::vector<std::string> lsRooms();```
+
+### 单聊
+@parm dstName 聊天对象的用户名
+@parm content 消息内容
+```void singleChat(std::string dstName, std::string content);```
+
+### 群聊
+@parm dstGroupName 群名称
+@parm content 消息内容
+```void groupChat(std::string dstGroupName, std::string content);```
+
+### 创建群
+@parm roomName 群名称
+@return MAKE_ROOM_SUCCESS 创建群成功
+@return MAKE_ROOM_SUCCESS 创建群失败
+```int mkRoom(std::string roomName);```
+
+### 进入群
+@parm roomName 群名称
+@return GETINTO_ROOM_SUCCESS 进入群成功
+@return GETINTO_ROOM_FAIL 进入群失败
+```int cdRoom(std::string roomName);```
+
+### 退出群
+@parm roomName 群名称
+@return QUIT_ROOM_SUCCESS 退出群成功
+@return QUIT_ROOM_FAIL 退出群失败
+```int qtRoom(std::string roomName);```
+
+### 客户端退出
+```void exit();```
+
+### 获取消息
+@return 每条消息以string类型存储，返回当前客户端收到的所有消息
+```std::vector<std::string>& getMessage();```
+
+
+
+
+
+
+
+
+
+
+
