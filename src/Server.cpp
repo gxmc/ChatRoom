@@ -8,6 +8,8 @@
 #include "Server.h"
 #include "Common.h"
 
+#include <iostream> // test
+
 namespace chat {
 
 Server::Server() : threadPool_(NUM_THREADS) {
@@ -78,6 +80,8 @@ void Server::solve()
         handleAccept(fd); 
     } else if (ev.events & EPOLLIN) {
         handleRead(fd);
+    } else if (ev.events & EPOLLOUT) {
+        handleWrite(fd);
     } else
         ;
 }
@@ -89,15 +93,20 @@ void Server::solve()
 void Server::handleAccept(int listenFd) {
     struct sockaddr_in clientAddr;
     socklen_t clientAddrLen;
-    int connectedFd;
+    int connectedFd, ret, flags;
     struct epoll_event ev;
 
     connectedFd = accept(listenFd, (struct sockaddr*)&clientAddrLen, 
                          &clientAddrLen);
 
+    // 非阻塞
+    flags = fcntl(connectedFd, F_GETFL, 0);
+    flags |= O_NONBLOCK;
+    fcntl(connectedFd, F_SETFL, flags);
+
     ev.events = EPOLLIN | EPOLLET;
     ev.data.fd = connectedFd;
-    int ret = epoll_ctl(epollFd_, EPOLL_CTL_ADD, connectedFd, &ev);
+    ret = epoll_ctl(epollFd_, EPOLL_CTL_ADD, connectedFd, &ev);
 }
 
 /* 处理已连接套接字可读
@@ -105,46 +114,162 @@ void Server::handleAccept(int listenFd) {
  * @parm fd 活跃的套接字
  */
 void Server::handleRead(int fd) {
-    int flags;
-
-    flags = fcntl(fd, F_GETFL, 0);
-    flags |= O_NONBLOCK;
-    fcntl(fd, F_SETFL, flags);
-
+    int flags, i, ret;
     Message msg;
-    int n = recv(fd, (void*)&msg, sizeof(Message), MSG_DONTWAIT);
+    bool loop;
+    char buf[2048];
+    ssize_t bytesRead, bytesTotal;
+    size_t bufSize;
 
-    if (n > 0) {
-        std::vector<std::string> require;
+    if (!recvBuffer_.exist(fd))
+        recvBuffer_.add(fd, std::vector<char>());
 
-        require.push_back(std::string(msg.command));
-        require.push_back(std::string(msg.dst));
-        require.push_back(std::string(msg.message));
+    loop = true;
 
-        if (require[0] == "signup")
-            clientSignUp(fd, require);
-        else if (require[0] == "signin")
-            clientSignIn(fd, require);
-        else if (require[0] == "lsuser")
-            lsUsers(fd);
-        else if (require[0] == "sgchat")
-            singleChat(fd, require[1], require[2]);
-        else if (require[0] == "gpchat")
-            groupChat(fd, require[1], require[2]);
-        else if (require[0] == "mkroom")
-            mkRoom(fd, require[1]);
-        else if (require[0] == "lsroom")
-            lsRooms(fd);
-        else if (require[0] == "cdroom")
-            cdRoom(fd, require[1]);
-        else if (require[0] == "qtroom")
-            qtRoom(fd, require[1]);
+    while (loop) {
+        bufSize = recvBuffer_.size(fd);
+
+        if (bufSize != 0) // 该FD的接收缓冲区存有上次未完整接收的数据
+            bytesTotal = sizeof(Message) - bufSize;
         else
-        ;
-    }
+            bytesTotal = sizeof(Message);
 
-    if (n == 0) {
-        handleClientClose(fd);
+        bytesRead = recv(fd, (void*)buf, bytesTotal, 0); 
+
+        if (bytesRead == bytesTotal) {
+            std::vector<std::string> require;
+
+            if (bytesRead == sizeof(Message)) { // 读到一个完整的消息
+                strncpy(msg.command, buf, 100); 
+                strncpy(msg.dst, buf + 100, 100); 
+                strncpy(msg.message, buf + 200, 1024); 
+            } else { // 上次和这次的数据合并成一个完整的Message
+                std::vector<char> tmp;
+                bool ret = recvBuffer_.retrive(fd, tmp, bufSize);
+                for (int i = 0; i < bytesRead; i++)
+                    tmp.push_back(buf[i]);
+                for (int i = 0; i < 100; i++)
+                    msg.command[i] = tmp[i];
+                for (int i = 0; i < 100; i++)
+                    msg.dst[i] = tmp[100 + i];
+                for (int i = 0; i < 1024; i++)
+                    msg.message[i] = tmp[200 + i];
+            }
+
+            require.push_back(std::string(msg.command));
+            require.push_back(std::string(msg.dst));
+            require.push_back(std::string(msg.message));
+
+            if (require[0] == "signup")
+                clientSignUp(fd, require);
+            else if (require[0] == "signin")
+                clientSignIn(fd, require);
+            else if (require[0] == "lsuser")
+                lsUsers(fd);
+            else if (require[0] == "sgchat")
+                singleChat(fd, require[1], require[2]);
+            else if (require[0] == "gpchat")
+                groupChat(fd, require[1], require[2]);
+            else if (require[0] == "mkroom")
+                mkRoom(fd, require[1]);
+            else if (require[0] == "lsroom")
+                lsRooms(fd);
+            else if (require[0] == "cdroom")
+                cdRoom(fd, require[1]);
+            else if (require[0] == "qtroom")
+                qtRoom(fd, require[1]);
+            else
+            ;
+        } else {
+            if (errno == EAGAIN) {// 处理该FD直到EAGAIN
+                loop = false;
+            } else if (bytesRead == 0) { // 客户端端开
+                handleClientClose(fd);
+                ret = epoll_ctl(epollFd_, EPOLL_CTL_DEL, fd, NULL);
+                loop = false;
+            } else { // bytesRead < bytesTotal
+                std::vector<char> tmp;
+                for (int i = 0; i < bytesRead; i++)
+                    tmp.push_back(buf[i]);
+                recvBuffer_.append(fd, tmp);
+            }
+        }
+    }
+}
+
+void Server::handleWrite(int fd) {
+    size_t bufSize;
+    bool flag;
+    ssize_t bytesSend;
+    int ret;
+
+    if (sendBuffer_.empty(fd))
+        return ;
+
+    flag = true;
+
+    while (flag) {
+        std::vector<char> tmp;
+        char buf[10000];
+
+        bufSize = sendBuffer_.size(fd);
+
+        sendBuffer_.retrive(fd, tmp, bufSize);
+        for (int i = 0; i < tmp.size(); i++)
+            buf[i] = tmp[i];
+
+        bytesSend = ::send(fd, buf, bufSize, 0);
+
+        if (bytesSend == bufSize) {
+            struct epoll_event ev;
+            ev.data.fd = fd;
+            ev.events = EPOLLIN | EPOLLET;
+            ret = epoll_ctl(epollFd_, EPOLL_CTL_MOD, fd, &ev);
+        } else if (0 < bytesSend && bytesSend < bufSize) {
+            tmp.clear();
+            for (int i = 0; i < bufSize - bytesSend; i++)
+                tmp.push_back(buf[bytesSend + i]);
+            sendBuffer_.append(fd, tmp);
+        } else if (bytesSend == -1 && errno == EAGAIN) {
+            flag = false; 
+        } else
+            ;
+    }
+}
+
+void Server::send(int fd, void* buf, size_t len) {
+    bool flag;
+    ssize_t bytesSend;
+    int ret;
+
+    flag = true;
+    char* buffer = (char*)buf;
+    ssize_t hasSend = 0;
+
+    while (flag) {
+        if (!sendBuffer_.empty(fd))
+            handleWrite(fd); // 将发送缓冲区数据发送到客户端
+
+        if (sendBuffer_.empty(fd)) {
+            bytesSend = ::send(fd, (void*)((char*)buf + hasSend), len - hasSend, 0); 
+            hasSend += bytesSend;
+
+            if (0 < bytesSend && bytesSend < len - hasSend) { // 将未发送完的数据放入发送缓冲区
+                std::vector<char> tmp;
+                for (int i = 0; i < len - hasSend - bytesSend; i++)
+                    tmp.push_back(buffer[hasSend + i]);
+                sendBuffer_.append(fd, tmp);
+            } else if (bytesSend == -1 && errno == EAGAIN) {
+                struct epoll_event ev; 
+                ev.data.fd = fd;
+                ev.events = EPOLLOUT | EPOLLET;
+                ret = epoll_ctl(epollFd_, EPOLL_CTL_MOD, fd, &ev);
+                flag = false;
+            } else if (bytesSend == 0)
+                flag = false;
+            else 
+            ;
+        }
     }
 }
 
@@ -198,7 +323,8 @@ void Server::clientSignUp(int fd, std::vector<std::string> require) {
 
     pthread_mutex_unlock(&usersMutex_);
 
-    send(fd, (void*)&ret, sizeof(ret), MSG_DONTWAIT);
+    //send(fd, (void*)&ret, sizeof(ret), 0);
+    send(fd, (void*)&ret, sizeof(ret));
 }
 
 /* 客户端登录
@@ -230,7 +356,8 @@ void Server::clientSignIn(int fd, std::vector<std::string> require) {
 
     pthread_mutex_unlock(&usersMutex_);
 
-    send(fd, (void*)&ret, sizeof(ret), MSG_DONTWAIT);
+    //send(fd, (void*)&ret, sizeof(ret), 0);
+    send(fd, (void*)&ret, sizeof(ret));
 }
 
 /* 列出当前服务器上所有在线用户
@@ -248,16 +375,20 @@ void Server::lsUsers(int fd) {
     }
     pthread_mutex_unlock(&usersMutex_);
 
-    send(fd, (void*)&count, sizeof(count), MSG_DONTWAIT);
+    //send(fd, (void*)&count, sizeof(count), 0);
+    send(fd, (void*)&count, sizeof(count));
+    send(fd, (void*)buf, count * sizeof(Name));
 
+/*
     int haveSend = 0;
-    int n = send(fd, (void*)buf, count * sizeof(Name), MSG_DONTWAIT);
+    int n = send(fd, (void*)buf, count * sizeof(Name), 0);
     haveSend += n;
     while (haveSend < count * sizeof(Name)) {
         n = send(fd, (void*)(buf + haveSend), 
-                 count * sizeof(Name) - haveSend, MSG_DONTWAIT);
+                 count * sizeof(Name) - haveSend, 0);
         haveSend += n;
     }
+    */
 }
 
 /* 单聊
@@ -286,7 +417,8 @@ void Server::singleChat(int fd, std::string usrName, std::string content) {
         strcpy(msg.dst, srcName.c_str());
         strcpy(msg.message, content.c_str());
 
-        send(users_[index].fd, (void*)&msg, sizeof(msg), MSG_DONTWAIT);
+        //send(users_[index].fd, (void*)&msg, sizeof(msg), 0);
+        send(users_[index].fd, (void*)&msg, sizeof(msg));
     }
 
     pthread_mutex_unlock(&usersMutex_);
@@ -331,7 +463,8 @@ void Server::groupChat(int fd, std::string grpName, std::string content) {
         strcpy(msg.dst, grpName.c_str());
         strcpy(msg.message, content.c_str());
 
-        send(fds[i], (void*)&msg, sizeof(msg), MSG_DONTWAIT);
+        //send(fds[i], (void*)&msg, sizeof(msg), 0);
+        send(fds[i], (void*)&msg, sizeof(msg));
     }
 }
 
@@ -359,7 +492,8 @@ void Server::mkRoom(int fd, std::string roomName) {
     }
 
     pthread_mutex_unlock(&roomsMutex_);
-    send(fd, (void*)&ret, sizeof(ret), MSG_DONTWAIT);
+    //send(fd, (void*)&ret, sizeof(ret), 0);
+    send(fd, (void*)&ret, sizeof(ret));
 }
 
 /* 列出服务器上的所有房间名
@@ -377,16 +511,20 @@ void Server::lsRooms(int fd) {
     }
     pthread_mutex_unlock(&roomsMutex_);
 
-    send(fd, (void*)&count, sizeof(count), MSG_DONTWAIT); 
+    send(fd, (void*)&count, sizeof(count)); 
+    send(fd, (void*)buf, count * sizeof(Name));
+
+    /*
 
     int haveSend = 0;
-    int n = send(fd, (void*)buf, count * sizeof(Name), MSG_DONTWAIT);
+    int n = send(fd, (void*)buf, count * sizeof(Name), 0);
     haveSend += n;
     while (haveSend < count * sizeof(Name)) {
         n = send(fd, (void*)(buf + haveSend), 
-                 count * sizeof(Name) - haveSend, MSG_DONTWAIT);
+                 count * sizeof(Name) - haveSend, 0);
         haveSend += n;
     }
+    */
 }
 
 /* 客户端进入房间
@@ -423,7 +561,8 @@ void Server::cdRoom(int fd, std::string roomName) {
 
     pthread_mutex_unlock(&usersMutex_);
 
-    send(fd, (void*)&ret, sizeof(ret), MSG_DONTWAIT);
+    //send(fd, (void*)&ret, sizeof(ret), 0);
+    send(fd, (void*)&ret, sizeof(ret));
 }
 
 /* 客户端退出房间
@@ -473,7 +612,8 @@ void Server::qtRoom(int fd, std::string roomName) {
 
     pthread_mutex_unlock(&usersMutex_);
 
-    send(fd, (void*)&ret, sizeof(ret), MSG_DONTWAIT);
+    //send(fd, (void*)&ret, sizeof(ret), 0);
+    send(fd, (void*)&ret, sizeof(ret));
 }
 
 } // namespace chat

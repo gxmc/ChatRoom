@@ -10,6 +10,7 @@
 #include <map>
 
 #include "ThreadPool.h"
+#include "Buffer.h"
 
 namespace chat {
 
@@ -38,9 +39,11 @@ private:
     void solve();
     void handleAccept(int listenFd);
     void handleRead(int fd);
+    void handleWrite(int fd);
     void handleClientClose(int fd);
 
 private:
+    void send(int fd, void* buf, size_t len);
     void clientSignUp(int fd, std::vector<std::string> require);
     void clientSignIn(int fd, std::vector<std::string> require);
 
@@ -67,6 +70,9 @@ private:
 
     std::map<std::string, std::vector<std::string>> rooms_;
     pthread_mutex_t roomsMutex_;
+
+    Buffer recvBuffer_; // 接收缓冲区
+    Buffer sendBuffer_; // 发送缓冲区
 };
 
 } // namespace chat

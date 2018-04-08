@@ -4,6 +4,7 @@
 #include <string.h>
 #include <sstream>
 #include <unistd.h>
+#include <fcntl.h>
 
 #include "Client.h"
 #include "Common.h"
@@ -44,15 +45,19 @@ bool Client::connectServer(std::string serverIp, int serverPort) {
 /* 接收消息线程的线程函数
  */
 void* Client::threadFunc(void* arg) {
-    int fd, bytes, size;
+    int fd, bytes, size, flags;
 
     Client* client = (Client*)arg;
     fd = client->socketFd_;
     size = sizeof(Message);
 
+    flags = fcntl(fd, F_GETFL, 0);
+    flags |= O_NONBLOCK;
+    fcntl(fd, F_SETFL, flags);
+
     while (true) {
         Message msg; 
-        bytes = recv(fd, (void*)&msg, sizeof(msg), MSG_DONTWAIT);
+        bytes = recv(fd, (void*)&msg, sizeof(msg), 0);
         if (bytes >= size) {
             std::string message;
 
