@@ -12,7 +12,6 @@
 namespace chat {
 
 /* 客户端连接服务器
- * 并且创建一个线程专门用于接收消息
  *
  * @param serverIp 服务器IP
  * @param serverIp 服务器端口
