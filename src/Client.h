@@ -32,10 +32,11 @@ public:
     std::vector<std::string>& getMessage();
 
 private:
-    static void* threadFunc(void* arg);
     std::vector<std::string> ls(std::string command);
     void chat(std::string chatType, std::string dstName, std::string content);
     int doRoom(std::string command, std::string roomName);
+    ssize_t Recv(int fd, void* buf, size_t len);
+    ssize_t Send(int fd, void* buf, size_t len);
 
 private:
     std::string serverIp_;

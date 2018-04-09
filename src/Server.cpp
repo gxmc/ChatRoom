@@ -8,19 +8,19 @@
 #include "Server.h"
 #include "Common.h"
 
-#include <iostream> // test
-
 namespace chat {
 
 Server::Server() : threadPool_(NUM_THREADS) {
     threadPool_.run();
     pthread_mutex_init(&usersMutex_, NULL);
     pthread_mutex_init(&roomsMutex_, NULL);
+    pthread_mutex_init(&msgMutex_, NULL);
 }
 
 Server::~Server() {
     pthread_mutex_destroy(&usersMutex_);
     pthread_mutex_destroy(&roomsMutex_);
+    pthread_mutex_destroy(&msgMutex_);
 }
 
 void Server::init() {
@@ -88,7 +88,7 @@ void Server::solve()
 
 /* 处理新连接到来
  *
- * @parm listenFd 服务器的监听套接字
+ * @param listenFd 服务器的监听套接字
  */
 void Server::handleAccept(int listenFd) {
     struct sockaddr_in clientAddr;
@@ -111,7 +111,7 @@ void Server::handleAccept(int listenFd) {
 
 /* 处理已连接套接字可读
  *
- * @parm fd 活跃的套接字
+ * @param fd 活跃的套接字
  */
 void Server::handleRead(int fd) {
     int flags, i, ret;
@@ -178,10 +178,12 @@ void Server::handleRead(int fd) {
                 cdRoom(fd, require[1]);
             else if (require[0] == "qtroom")
                 qtRoom(fd, require[1]);
+            else if (require[0] == "getmsg")
+                getMsg(fd);
             else
             ;
         } else {
-            if (errno == EAGAIN) {// 处理该FD直到EAGAIN
+            if (bytesRead == -1 && errno == EAGAIN) {// 处理该FD直到EAGAIN
                 loop = false;
             } else if (bytesRead == 0) { // 客户端端开
                 handleClientClose(fd);
@@ -237,7 +239,7 @@ void Server::handleWrite(int fd) {
     }
 }
 
-void Server::send(int fd, void* buf, size_t len) {
+void Server::Send(int fd, void* buf, size_t len) {
     bool flag;
     ssize_t bytesSend;
     int ret;
@@ -248,7 +250,7 @@ void Server::send(int fd, void* buf, size_t len) {
 
     while (flag) {
         if (!sendBuffer_.empty(fd))
-            handleWrite(fd); // 将发送缓冲区数据发送到客户端
+            handleWrite(fd); // 先将发送缓冲区数据发送到客户端
 
         if (sendBuffer_.empty(fd)) {
             bytesSend = ::send(fd, (void*)((char*)buf + hasSend), len - hasSend, 0); 
@@ -259,23 +261,32 @@ void Server::send(int fd, void* buf, size_t len) {
                 for (int i = 0; i < len - hasSend - bytesSend; i++)
                     tmp.push_back(buffer[hasSend + i]);
                 sendBuffer_.append(fd, tmp);
+                hasSend = len;
+
             } else if (bytesSend == -1 && errno == EAGAIN) {
                 struct epoll_event ev; 
                 ev.data.fd = fd;
                 ev.events = EPOLLOUT | EPOLLET;
                 ret = epoll_ctl(epollFd_, EPOLL_CTL_MOD, fd, &ev);
-                flag = false;
+                break;
+
             } else if (bytesSend == 0)
-                flag = false;
+                break;
             else 
-            ;
+                ;
+        } else { // 追加到发送缓冲区
+            std::vector<char> tmp;
+            for (int i = 0; i < len; i++)
+                tmp.push_back(buffer[i]);
+            sendBuffer_.append(fd, tmp);
+            break;
         }
     }
 }
 
 /* 客户端关闭处理
  *
- * @parm fd 客户端套接字
+ * @param fd 客户端套接字
  */
 void Server::handleClientClose(int fd) {
     close(fd);
@@ -294,7 +305,7 @@ void Server::handleClientClose(int fd) {
 
 /* 客户端注册
  *
- * @parm fd 客户端套接字
+ * @param fd 客户端套接字
  * @require 客户端发送过来的协议内容
  */
 void Server::clientSignUp(int fd, std::vector<std::string> require) {
@@ -323,13 +334,12 @@ void Server::clientSignUp(int fd, std::vector<std::string> require) {
 
     pthread_mutex_unlock(&usersMutex_);
 
-    //send(fd, (void*)&ret, sizeof(ret), 0);
-    send(fd, (void*)&ret, sizeof(ret));
+    Send(fd, (void*)&ret, sizeof(ret));
 }
 
 /* 客户端登录
  *
- * @parm fd 客户端套接字
+ * @param fd 客户端套接字
  * @require 客户端发送过来的协议内容
  */
 void Server::clientSignIn(int fd, std::vector<std::string> require) {
@@ -356,13 +366,12 @@ void Server::clientSignIn(int fd, std::vector<std::string> require) {
 
     pthread_mutex_unlock(&usersMutex_);
 
-    //send(fd, (void*)&ret, sizeof(ret), 0);
-    send(fd, (void*)&ret, sizeof(ret));
+    Send(fd, (void*)&ret, sizeof(ret));
 }
 
 /* 列出当前服务器上所有在线用户
  *
- * @parm fd 客户端套接字
+ * @param fd 客户端套接字
  */
 void Server::lsUsers(int fd) {
     Name buf[1000];
@@ -375,33 +384,21 @@ void Server::lsUsers(int fd) {
     }
     pthread_mutex_unlock(&usersMutex_);
 
-    //send(fd, (void*)&count, sizeof(count), 0);
-    send(fd, (void*)&count, sizeof(count));
-    send(fd, (void*)buf, count * sizeof(Name));
-
-/*
-    int haveSend = 0;
-    int n = send(fd, (void*)buf, count * sizeof(Name), 0);
-    haveSend += n;
-    while (haveSend < count * sizeof(Name)) {
-        n = send(fd, (void*)(buf + haveSend), 
-                 count * sizeof(Name) - haveSend, 0);
-        haveSend += n;
-    }
-    */
+    Send(fd, (void*)&count, sizeof(count));
+    Send(fd, (void*)buf, count * sizeof(Name));
 }
 
 /* 单聊
  *
- * @parm fd 客户端套接字
- * @parm usrName 目的客户端用户名
- * @parm content 聊天内容
+ * @param fd 客户端套接字
+ * @param usrName 目的客户端用户名
+ * @param content 聊天内容
  */
 void Server::singleChat(int fd, std::string usrName, std::string content) {
-    pthread_mutex_lock(&usersMutex_);
-
     int index = -1;
     std::string srcName;
+
+    pthread_mutex_lock(&usersMutex_);
     for (int i = 0; i < users_.size(); i++) {
         if (fd == users_[i].fd)
             srcName = users_[i].name;
@@ -410,6 +407,7 @@ void Server::singleChat(int fd, std::string usrName, std::string content) {
             index = i;
         }
     }
+    pthread_mutex_unlock(&usersMutex_);
 
     if (index != -1) {
         Message msg;
@@ -417,18 +415,19 @@ void Server::singleChat(int fd, std::string usrName, std::string content) {
         strcpy(msg.dst, srcName.c_str());
         strcpy(msg.message, content.c_str());
 
-        //send(users_[index].fd, (void*)&msg, sizeof(msg), 0);
-        send(users_[index].fd, (void*)&msg, sizeof(msg));
+        pthread_mutex_lock(&msgMutex_);
+        auto iter = clientsMsg_.find(users_[index].fd);
+        clientsMsg_[users_[index].fd] = msg;
+        pthread_mutex_unlock(&msgMutex_);
     }
 
-    pthread_mutex_unlock(&usersMutex_);
 }
 
 /* 群聊
  *
- * @parm fd 客户端套接字
- * @parm grpName 群名字
- * @parm content 聊天内容
+ * @param fd 客户端套接字
+ * @param grpName 群名字
+ * @param content 聊天内容
  */
 void Server::groupChat(int fd, std::string grpName, std::string content) {
     std::vector<int> fds;
@@ -456,6 +455,7 @@ void Server::groupChat(int fd, std::string grpName, std::string content) {
     pthread_mutex_unlock(&usersMutex_);
 
 
+    pthread_mutex_lock(&msgMutex_);
     for (int i = 0; i < fds.size(); i++) {
         Message msg; 
         strcpy(msg.command, "gpchat ");
@@ -463,15 +463,15 @@ void Server::groupChat(int fd, std::string grpName, std::string content) {
         strcpy(msg.dst, grpName.c_str());
         strcpy(msg.message, content.c_str());
 
-        //send(fds[i], (void*)&msg, sizeof(msg), 0);
-        send(fds[i], (void*)&msg, sizeof(msg));
+        clientsMsg_[fds[i]] = msg;
     }
+    pthread_mutex_unlock(&msgMutex_);
 }
 
 /* 创建房间
  *
- * @parm fd 客户端套接字
- * @parm roomName 要创建的房间名
+ * @param fd 客户端套接字
+ * @param roomName 要创建的房间名
  */
 void Server::mkRoom(int fd, std::string roomName) {
     pthread_mutex_lock(&roomsMutex_);
@@ -492,13 +492,12 @@ void Server::mkRoom(int fd, std::string roomName) {
     }
 
     pthread_mutex_unlock(&roomsMutex_);
-    //send(fd, (void*)&ret, sizeof(ret), 0);
-    send(fd, (void*)&ret, sizeof(ret));
+    Send(fd, (void*)&ret, sizeof(ret));
 }
 
 /* 列出服务器上的所有房间名
  *
- * @parm fd 客户端套接字
+ * @param fd 客户端套接字
  */
 void Server::lsRooms(int fd) {
     Name buf[1000];
@@ -511,26 +510,14 @@ void Server::lsRooms(int fd) {
     }
     pthread_mutex_unlock(&roomsMutex_);
 
-    send(fd, (void*)&count, sizeof(count)); 
-    send(fd, (void*)buf, count * sizeof(Name));
-
-    /*
-
-    int haveSend = 0;
-    int n = send(fd, (void*)buf, count * sizeof(Name), 0);
-    haveSend += n;
-    while (haveSend < count * sizeof(Name)) {
-        n = send(fd, (void*)(buf + haveSend), 
-                 count * sizeof(Name) - haveSend, 0);
-        haveSend += n;
-    }
-    */
+    Send(fd, (void*)&count, sizeof(count)); 
+    Send(fd, (void*)buf, count * sizeof(Name));
 }
 
 /* 客户端进入房间
  *
- * @parm fd 客户端套接字
- * @parm roomName 房间名
+ * @param fd 客户端套接字
+ * @param roomName 房间名
  */
 void Server::cdRoom(int fd, std::string roomName) {
     int ret;
@@ -561,14 +548,13 @@ void Server::cdRoom(int fd, std::string roomName) {
 
     pthread_mutex_unlock(&usersMutex_);
 
-    //send(fd, (void*)&ret, sizeof(ret), 0);
-    send(fd, (void*)&ret, sizeof(ret));
+    Send(fd, (void*)&ret, sizeof(ret));
 }
 
 /* 客户端退出房间
  *
- * @parm fd 客户端套接字
- * @parm roomName 房间名
+ * @param fd 客户端套接字
+ * @param roomName 房间名
  */
 void Server::qtRoom(int fd, std::string roomName) {
     int ret;
@@ -612,8 +598,24 @@ void Server::qtRoom(int fd, std::string roomName) {
 
     pthread_mutex_unlock(&usersMutex_);
 
-    //send(fd, (void*)&ret, sizeof(ret), 0);
-    send(fd, (void*)&ret, sizeof(ret));
+    Send(fd, (void*)&ret, sizeof(ret));
+}
+
+void Server::getMsg(int fd) {
+    pthread_mutex_lock(&msgMutex_);
+
+    auto iter = clientsMsg_.find(fd);
+    if (iter == clientsMsg_.end()) {
+        Message msg;
+        strcpy(msg.message, "none");
+        Send(fd, &msg, sizeof(msg));
+        pthread_mutex_unlock(&msgMutex_);
+        return ;
+    }
+
+    Send(fd, &iter->second, sizeof(Message));
+
+    pthread_mutex_unlock(&msgMutex_);
 }
 
 } // namespace chat

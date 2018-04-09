@@ -43,7 +43,7 @@ private:
     void handleClientClose(int fd);
 
 private:
-    void send(int fd, void* buf, size_t len);
+    void Send(int fd, void* buf, size_t len);
     void clientSignUp(int fd, std::vector<std::string> require);
     void clientSignIn(int fd, std::vector<std::string> require);
 
@@ -55,6 +55,7 @@ private:
     void cdRoom(int fd, std::string roomName);
     void qtRoom(int fd, std::string roomName);
     void groupChat(int fd, std::string grpName, std::string content);
+    void getMsg(int fd);
 
 private:
     ThreadPool threadPool_;
@@ -70,6 +71,9 @@ private:
 
     std::map<std::string, std::vector<std::string>> rooms_;
     pthread_mutex_t roomsMutex_;
+
+    std::map<int, Message> clientsMsg_; // 发送给客户端的消息
+    pthread_mutex_t msgMutex_;
 
     Buffer recvBuffer_; // 接收缓冲区
     Buffer sendBuffer_; // 发送缓冲区

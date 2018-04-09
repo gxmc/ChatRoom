@@ -6,8 +6,8 @@ namespace chat {
 /* 线程类的构造函数
  * 调用该构造函数，会创建一个线程，并使该线程运行在线程函数内
  *
- * @parm func 线程函数
- * @parm pool 线程池指针，指向线程所在的线程池
+ * @param func 线程函数
+ * @param pool 线程池指针，指向线程所在的线程池
  */
 Thread::Thread(ThreadFunc func, ThreadPool* pool)
     : func_(func) 
@@ -18,7 +18,7 @@ Thread::Thread(ThreadFunc func, ThreadPool* pool)
 /* 线程池的构造函数
  * 设定线程池中线程的数目
  *
- * @parm numThreads 线程池中线程数目
+ * @param numThreads 线程池中线程数目
  */
 ThreadPool::ThreadPool(int numThreads)
     : numThreads_(numThreads)
@@ -38,7 +38,7 @@ ThreadPool::~ThreadPool()
 /* 线程池的启动函数
  * 创建指定数目的线程，为每个线程设定线程函数和线程函数的参数
  *
- * @parm void
+ * @param void
  * @return void
  */
 void ThreadPool::run()
@@ -53,7 +53,7 @@ void ThreadPool::run()
  *
  * 线程池中每个线程的线程函数
  *
- * @parm arg 线程函数的参数
+ * @param arg 线程函数的参数
  * @return void* 线程终止状态
  */
 void* ThreadPool::threadFunc(void* arg)
@@ -76,7 +76,7 @@ void* ThreadPool::threadFunc(void* arg)
 /* 线程池对外提供的获取工作队列的接口
  * 线程池中的线程可以通过该接口取任务
  *
- * @parm void
+ * @param void
  * @return Queue<WorkType>* 指向工作队列的指针
  */
 Queue<WorkType>* ThreadPool::getWorkQueue()
@@ -86,7 +86,7 @@ Queue<WorkType>* ThreadPool::getWorkQueue()
 
 /* 线程池对外提供的获取线程数组的接口
  *
- * @parm void
+ * @param void
  * @return vector<Thread>* 指向线程数组的指针
  */
 std::vector<Thread*>* ThreadPool::getThreads()
