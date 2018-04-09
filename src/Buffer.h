@@ -12,7 +12,8 @@ namespace chat {
 
 class Buffer {
 public:
-    Buffer() { mutex_ = PTHREAD_MUTEX_INITIALIZER; }
+    Buffer() { pthread_mutex_init(&mutex_, NULL); }
+    ~Buffer() { pthread_mutex_destroy(&mutex_); }
 
     bool exist(int fd) {
         bool ret;
