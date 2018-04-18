@@ -5,6 +5,8 @@
 #include <fcntl.h>
 #include <sstream>
 
+#include <iostream> // test
+
 #include "Server.h"
 #include "Common.h"
 
@@ -74,16 +76,16 @@ void Server::solve()
 {
     struct epoll_event ev;
     threadPoolArg_.get(ev);
-
     int fd = ev.data.fd;
+
     if (fd == listenFd_ && (ev.events & EPOLLIN)) {
         handleAccept(fd); 
     } else if (ev.events & EPOLLIN) {
         handleRead(fd);
     } else if (ev.events & EPOLLOUT) {
         handleWrite(fd);
-    } else
-        ;
+    } else {
+    }
 }
 
 /* 处理新连接到来
@@ -96,8 +98,18 @@ void Server::handleAccept(int listenFd) {
     int connectedFd, ret, flags;
     struct epoll_event ev;
 
-    connectedFd = accept(listenFd, (struct sockaddr*)&clientAddrLen, 
-                         &clientAddrLen);
+    while (1) {
+        clientAddrLen = sizeof(clientAddr);
+        connectedFd = accept(listenFd, (struct sockaddr*)&clientAddr, 
+                             &clientAddrLen);
+        if (connectedFd == -1) {
+            if (errno == EINTR) 
+                continue;
+            else
+                return ;
+        }
+        break;
+    }
 
     // 非阻塞
     flags = fcntl(connectedFd, F_GETFL, 0);
@@ -146,8 +158,7 @@ void Server::handleRead(int fd) {
             } else { // 上次和这次的数据合并成一个完整的Message
                 std::vector<char> tmp;
                 bool ret = recvBuffer_.retrive(fd, tmp, bufSize);
-                for (int i = 0; i < bytesRead; i++)
-                    tmp.push_back(buf[i]);
+                tmp.insert(tmp.end(), buf, buf + bytesRead);
                 for (int i = 0; i < 100; i++)
                     msg.command[i] = tmp[i];
                 for (int i = 0; i < 100; i++)
@@ -159,7 +170,6 @@ void Server::handleRead(int fd) {
             require.push_back(std::string(msg.command));
             require.push_back(std::string(msg.dst));
             require.push_back(std::string(msg.message));
-
             if (require[0] == "signup")
                 clientSignUp(fd, require);
             else if (require[0] == "signin")
@@ -180,23 +190,35 @@ void Server::handleRead(int fd) {
                 qtRoom(fd, require[1]);
             else if (require[0] == "getmsg")
                 getMsg(fd);
-            else
-            ;
+            else {
+            }
         } else {
-            if (bytesRead == -1 && errno == EAGAIN) {// 处理该FD直到EAGAIN
-                loop = false;
+            if (bytesRead == -1) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) // 处理该FD直到EAGAIN
+                    loop = false;
+                if (errno == EINTR) {
+                    releaseClient(fd);    
+                    loop = false;
+                }
             } else if (bytesRead == 0) { // 客户端端开
                 handleClientClose(fd);
                 ret = epoll_ctl(epollFd_, EPOLL_CTL_DEL, fd, NULL);
                 loop = false;
             } else { // bytesRead < bytesTotal
                 std::vector<char> tmp;
-                for (int i = 0; i < bytesRead; i++)
-                    tmp.push_back(buf[i]);
+                tmp.insert(tmp.end(), buf, buf + bytesRead);
                 recvBuffer_.append(fd, tmp);
             }
         }
     }
+}
+
+void Server::releaseClient(int fd) {
+    int ret;
+    handleClientClose(fd);
+    ret = epoll_ctl(epollFd_, EPOLL_CTL_DEL, fd, NULL);
+    recvBuffer_.del(fd);
+    sendBuffer_.del(fd);
 }
 
 void Server::handleWrite(int fd) {
@@ -229,13 +251,17 @@ void Server::handleWrite(int fd) {
             ret = epoll_ctl(epollFd_, EPOLL_CTL_MOD, fd, &ev);
         } else if (0 < bytesSend && bytesSend < bufSize) {
             tmp.clear();
-            for (int i = 0; i < bufSize - bytesSend; i++)
-                tmp.push_back(buf[bytesSend + i]);
+            tmp.insert(tmp.end(), buf + bytesSend, buf + bufSize);
             sendBuffer_.append(fd, tmp);
-        } else if (bytesSend == -1 && errno == EAGAIN) {
-            flag = false; 
-        } else
-            ;
+        } else if (bytesSend == -1) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) 
+                flag = false; 
+            if (errno == EINTR) {
+                releaseClient(fd);
+                flag = false;
+            }
+        } else {
+        }
     }
 }
 
@@ -258,26 +284,29 @@ void Server::Send(int fd, void* buf, size_t len) {
 
             if (0 < bytesSend && bytesSend < len - hasSend) { // 将未发送完的数据放入发送缓冲区
                 std::vector<char> tmp;
-                for (int i = 0; i < len - hasSend - bytesSend; i++)
-                    tmp.push_back(buffer[hasSend + i]);
+                tmp.insert(tmp.end(), buffer + hasSend, buffer + len - bytesSend);
                 sendBuffer_.append(fd, tmp);
                 hasSend = len;
 
-            } else if (bytesSend == -1 && errno == EAGAIN) {
-                struct epoll_event ev; 
-                ev.data.fd = fd;
-                ev.events = EPOLLOUT | EPOLLET;
-                ret = epoll_ctl(epollFd_, EPOLL_CTL_MOD, fd, &ev);
-                break;
-
+            } else if (bytesSend == -1) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    struct epoll_event ev; 
+                    ev.data.fd = fd;
+                    ev.events = EPOLLOUT | EPOLLET;
+                    ret = epoll_ctl(epollFd_, EPOLL_CTL_MOD, fd, &ev);
+                    break;
+                }
+                else {
+                    releaseClient(fd); 
+                    break;
+                }
             } else if (bytesSend == 0)
                 break;
-            else 
-                ;
+            else {
+            }
         } else { // 追加到发送缓冲区
             std::vector<char> tmp;
-            for (int i = 0; i < len; i++)
-                tmp.push_back(buffer[i]);
+            tmp.insert(tmp.end(), buffer, buffer + len);
             sendBuffer_.append(fd, tmp);
             break;
         }
