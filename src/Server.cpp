@@ -202,8 +202,7 @@ void Server::handleRead(int fd) {
                     loop = false;
                 }
             } else if (bytesRead == 0) { // 客户端端开
-                handleClientClose(fd);
-                ret = epoll_ctl(epollFd_, EPOLL_CTL_DEL, fd, NULL);
+                releaseClient(fd);
                 loop = false;
             } else { // bytesRead < bytesTotal
                 std::vector<char> tmp;
