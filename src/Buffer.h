@@ -76,7 +76,7 @@ public:
         if (iter == buffer_.end() || iter->second.size() < len)
             ret = false;
         else {
-            buf.insert(buf.end(), iter->second.begin(), iter->second.begin() + i);
+            buf.insert(buf.end(), iter->second.begin(), iter->second.begin() + len);
             std::vector<char> tmp(iter->second.begin() + len, iter->second.end());
             std::swap(tmp, iter->second);
         }
