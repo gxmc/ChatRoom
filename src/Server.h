@@ -56,6 +56,7 @@ private:
     void qtRoom(int fd, std::string roomName);
     void groupChat(int fd, std::string grpName, std::string content);
     void getMsg(int fd);
+    void releaseClient(int fd);
 
 private:
     ThreadPool threadPool_;
