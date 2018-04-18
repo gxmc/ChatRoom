@@ -5,8 +5,6 @@
 #include <fcntl.h>
 #include <sstream>
 
-#include <iostream> // test
-
 #include "Server.h"
 #include "Common.h"
 
