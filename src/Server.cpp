@@ -44,13 +44,16 @@ void Server::init() {
  * 其中使用了另一个队列存放每个事件的信息
  */
 void Server::eventLoop() {
-    int epollFd, numReadyEvents;
+    int epollFd, numReadyEvents, flags;
     struct epoll_event events[MAXEVENTS];
     struct epoll_event ev;
 
     epollFd_ = epoll_create1(EPOLL_CLOEXEC);
     ev.events = EPOLLIN | EPOLLET;
     ev.data.fd = listenFd_;
+    flags = fcntl(listenFd_, F_GETFL, 0);
+    flags |= O_NONBLOCK;
+    fcntl(listenFd_, F_SETFL, flags);
     epoll_ctl(epollFd_, EPOLL_CTL_ADD, listenFd_, &ev);
 
     Queue<WorkType>* workQueue = threadPool_.getWorkQueue();
