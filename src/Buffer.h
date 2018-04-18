@@ -51,13 +51,19 @@ public:
         pthread_mutex_unlock(&mutex_);
     }
 
+    void del(int fd) {
+        pthread_mutex_lock(&mutex_);
+        auto iter = buffer_.find(fd);
+        if (iter != buffer_.end())
+            buffer_.erase(iter);
+        pthread_mutex_unlock(&mutex_);
+    }
+
     void append(int fd, std::vector<char> buf) {
         pthread_mutex_lock(&mutex_);
         auto iter = buffer_.find(fd);
-        if (iter != buffer_.end()) {
-            for (int i = 0; i < buf.size(); i++)
-                iter->second.push_back(buf[i]);
-        }
+        if (iter != buffer_.end())
+            iter->second.insert(iter->second.end(), buf.begin(), buf.end());
         pthread_mutex_unlock(&mutex_);
     }
 
@@ -70,11 +76,12 @@ public:
         if (iter == buffer_.end() || iter->second.size() < len)
             ret = false;
         else {
-            for (i = 0; i < len; i++) 
-                buf.push_back(iter->second[i]);
+            buf.insert(buf.end(), iter->second.begin(), iter->second.begin() + i);
             std::vector<char> tmp(iter->second.begin() + len, iter->second.end());
             std::swap(tmp, iter->second);
         }
+        pthread_mutex_unlock(&mutex_);
+        return ret;
     }
 
     size_t size(int fd) {
