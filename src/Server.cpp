@@ -195,9 +195,11 @@ void Server::handleRead(int fd) {
             }
         } else {
             if (bytesRead == -1) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) // 处理该FD直到EAGAIN
+                if (errno == EAGAIN || errno == EWOULDBLOCK) { // 处理该FD直到EAGAIN
                     loop = false;
-                if (errno == EINTR) {
+                } else if (errno == EINTR) {
+                    continue; 
+                } else {
                     releaseClient(fd);    
                     loop = false;
                 }
@@ -256,7 +258,9 @@ void Server::handleWrite(int fd) {
         } else if (bytesSend == -1) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) 
                 flag = false; 
-            if (errno == EINTR) {
+            else if (errno == EINTR)
+                continue;
+            else {
                 releaseClient(fd);
                 flag = false;
             }
@@ -295,8 +299,9 @@ void Server::Send(int fd, void* buf, size_t len) {
                     ev.events = EPOLLOUT | EPOLLET;
                     ret = epoll_ctl(epollFd_, EPOLL_CTL_MOD, fd, &ev);
                     break;
-                }
-                else {
+                } else if (errno == EINTR) {
+                    continue;
+                } else {
                     releaseClient(fd); 
                     break;
                 }
